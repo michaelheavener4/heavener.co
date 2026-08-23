@@ -18,7 +18,7 @@ const formatRelative = (value) => {
 const escapeHtml = (value = '') => String(value).replace(/[&<>'"]/g, (char) => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', "'":'&#39;', '"':'&quot;' }[char]));
 
 const typeLabel = (event) => event.private ? 'PRIVATE PROJECT' : ({
-  PushEvent: 'PUSH', CreateEvent: 'CREATED', DeleteEvent: 'DELETED', PullRequestEvent: 'PULL REQUEST',
+  PushEvent: 'PUSH', ProjectEvent: 'PROJECT UPDATE', CreateEvent: 'CREATED', DeleteEvent: 'DELETED', PullRequestEvent: 'PULL REQUEST',
   IssuesEvent: 'ISSUE', IssueCommentEvent: 'COMMENT', WatchEvent: 'STARRED', ForkEvent: 'FORKED', ReleaseEvent: 'RELEASE'
 }[event.type] || event.type.replace('Event', '').toUpperCase());
 
