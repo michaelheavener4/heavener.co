@@ -17,16 +17,9 @@ const formatRelative = (value) => {
 
 const escapeHtml = (value = '') => String(value).replace(/[&<>'"]/g, (char) => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', "'":'&#39;', '"':'&quot;' }[char]));
 
-const typeLabel = (event) => ({
-  PushEvent: 'PUSH',
-  CreateEvent: 'CREATED',
-  DeleteEvent: 'DELETED',
-  PullRequestEvent: 'PULL REQUEST',
-  IssuesEvent: 'ISSUE',
-  IssueCommentEvent: 'COMMENT',
-  WatchEvent: 'STARRED',
-  ForkEvent: 'FORKED',
-  ReleaseEvent: 'RELEASE'
+const typeLabel = (event) => event.private ? 'PRIVATE PROJECT' : ({
+  PushEvent: 'PUSH', CreateEvent: 'CREATED', DeleteEvent: 'DELETED', PullRequestEvent: 'PULL REQUEST',
+  IssuesEvent: 'ISSUE', IssueCommentEvent: 'COMMENT', WatchEvent: 'STARRED', ForkEvent: 'FORKED', ReleaseEvent: 'RELEASE'
 }[event.type] || event.type.replace('Event', '').toUpperCase());
 
 async function loadGithubPage() {
@@ -47,14 +40,26 @@ async function loadGithubPage() {
         <div class="profile-handle">@${escapeHtml(data.profile.handle)}</div>
         ${data.profile.bio ? `<p class="profile-bio">${escapeHtml(data.profile.bio)}</p>` : ''}
         <div class="profile-stats">
-          <span>${data.stats.repositories} repos</span>
+          <span>${data.stats.repositories} projects</span>
+          <span>${data.stats.public_repositories} public</span>
+          <span>${data.stats.private_repositories} private</span>
           <span>${data.stats.stars} stars</span>
           <span>${data.profile.followers} followers</span>
-          ${data.stats.languages.length ? `<span>${data.stats.languages.map(escapeHtml).join(' · ')}</span>` : ''}
         </div>
       </div>`;
 
-    document.querySelector('[data-repo-count]').textContent = `${data.stats.repositories} PUBLIC REPOSITORIES`;
+    document.querySelector('[data-project-count]').textContent = `${data.stats.repositories} PROJECTS · ${data.stats.private_repositories} PRIVATE`;
+
+    document.querySelector('[data-private-projects]').innerHTML = (data.private_projects || []).map((project) => `
+      <article class="project-card">
+        <div class="project-top"><span class="repo-meta">${escapeHtml(project.label)}</span><span class="live-mark"><span class="dot"></span>LIVE</span></div>
+        <h3>${escapeHtml(project.name)}</h3>
+        <p>${escapeHtml(project.description)}</p>
+        <div class="project-bottom">
+          <span>${escapeHtml(project.language || 'SOFTWARE')}</span>
+          <span>updated ${escapeHtml(formatRelative(project.pushed_at || project.updated_at))}</span>
+        </div>
+      </article>`).join('') || '<div class="project-card"><div class="status-line">No private projects found.</div></div>';
 
     document.querySelector('[data-repos]').innerHTML = data.repos.map((repo) => `
       <a class="repo ${repo.archived ? 'is-archived' : ''}" href="${escapeHtml(repo.html_url)}" target="_blank" rel="noopener noreferrer">
@@ -68,11 +73,11 @@ async function loadGithubPage() {
       </a>`).join('') || '<div class="repo"><div class="status-line">No public repositories found.</div></div>';
 
     document.querySelector('[data-activity]').innerHTML = data.activity.map((event) => `
-      <div class="activity-item">
+      <div class="activity-item ${event.private ? 'is-private' : ''}">
         <div class="activity-type">${typeLabel(event)}</div>
-        <div class="activity-body"><a href="${escapeHtml(event.repo_url)}" target="_blank" rel="noopener noreferrer"><strong>${escapeHtml(event.repo)}</strong></a>${event.detail ? ` <span class="activity-detail">— ${escapeHtml(event.detail)}</span>` : ''}</div>
+        <div class="activity-body">${event.private ? `<strong>${escapeHtml(event.repo)}</strong>` : `<a href="${escapeHtml(event.repo_url)}" target="_blank" rel="noopener noreferrer"><strong>${escapeHtml(event.repo)}</strong></a>`}${event.detail ? ` <span class="activity-detail">— ${escapeHtml(event.detail)}</span>` : ''}</div>
         <div class="activity-time" title="${escapeHtml(formatDate(event.created_at))}">${escapeHtml(formatRelative(event.created_at))}</div>
-      </div>`).join('') || '<div class="activity-item"><div class="status-line">No public activity returned.</div></div>';
+      </div>`).join('') || '<div class="activity-item"><div class="status-line">No recent activity returned.</div></div>';
 
     document.querySelector('[data-updated]').textContent = `LIVE · ${formatRelative(data.generated_at)}`;
   } catch (error) {
@@ -81,3 +86,4 @@ async function loadGithubPage() {
 }
 
 loadGithubPage();
+setInterval(loadGithubPage, 120000);
