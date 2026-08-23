@@ -5,11 +5,5 @@
   "pages_build_output_dir": ".",
   "observability": {
     "enabled": true
-  },
-  "routes": [
-    {
-      "pattern": "heavener.co",
-      "custom_domain": true
-    }
-  ]
+  }
 }
