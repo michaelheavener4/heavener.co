@@ -40,7 +40,7 @@ const activityDetail = (event) => {
   switch (event.type) {
     case 'PushEvent': {
       const count = payload.size || payload.commits?.length || 0;
-      return plural(count, 'commit');
+      return count ? plural(count, 'commit') : 'code updated';
     }
     case 'PullRequestEvent':
       return `${payload.action || 'updated'} pull request${payload.number ? ` #${payload.number}` : ''}`;
@@ -128,17 +128,42 @@ export async function onRequestGet({ env }) {
       publicEvents = [];
     }
 
-    const publicActivity = publicEvents
+    // GitHub's public event feed can contain many nearly-identical PushEvents
+    // for a single project. Keep only the latest meaningful event per repo so
+    // the portfolio reads like a project timeline rather than a raw event log.
+    const publicActivityByRepo = new Map();
+    publicEvents
       .filter((event) => event.repo?.name && event.repo.name.split('/')[0] === USERNAME)
-      .slice(0, 15)
-      .map((event) => ({
-        type: event.type,
-        repo: event.repo.name.split('/')[1],
-        repo_url: `https://github.com/${event.repo.name}`,
-        created_at: event.created_at,
-        detail: activityDetail(event),
-        private: false
-      }));
+      .forEach((event) => {
+        const repoName = event.repo.name.split('/')[1];
+        if (!publicActivityByRepo.has(repoName)) {
+          publicActivityByRepo.set(repoName, {
+            type: event.type,
+            repo: repoName,
+            repo_url: `https://github.com/${event.repo.name}`,
+            created_at: event.created_at,
+            detail: activityDetail(event),
+            private: false
+          });
+        }
+      });
+
+    // Repository timestamps provide a reliable fallback for public projects
+    // whose event has aged out of GitHub's public activity feed.
+    publicRepos.forEach((repo) => {
+      if (!publicActivityByRepo.has(repo.name) && repoUpdatedAt(repo)) {
+        publicActivityByRepo.set(repo.name, {
+          type: 'ProjectEvent',
+          repo: repo.name,
+          repo_url: repo.html_url,
+          created_at: repoUpdatedAt(repo),
+          detail: 'project updated',
+          private: false
+        });
+      }
+    });
+
+    const publicActivity = [...publicActivityByRepo.values()];
 
     // GitHub's authenticated user-events feed can contain private activity.
     // We deliberately reduce it to a generic project update before returning it.
@@ -147,15 +172,22 @@ export async function onRequestGet({ env }) {
       try {
         const events = await github('/user/events?per_page=50', env, { privateRequest: true });
         const privateNames = new Set(privateRepos.map((repo) => repo.full_name));
-        privateActivity = events
+        const privateActivityByRepo = new Map();
+        events
           .filter((event) => event.repo?.name && privateNames.has(event.repo.name))
-          .map((event) => ({
-            type: 'PrivateProjectEvent',
-            repo: event.repo.name.split('/').pop(),
-            created_at: event.created_at,
-            detail: event.type === 'PushEvent' ? 'code updated' : 'project activity',
-            private: true
-          }));
+          .forEach((event) => {
+            const repoName = event.repo.name.split('/').pop();
+            if (!privateActivityByRepo.has(repoName)) {
+              privateActivityByRepo.set(repoName, {
+                type: 'PrivateProjectEvent',
+                repo: repoName,
+                created_at: event.created_at,
+                detail: event.type === 'PushEvent' ? 'code updated' : 'project activity',
+                private: true
+              });
+            }
+          });
+        privateActivity = [...privateActivityByRepo.values()];
       } catch (_) {
         privateActivity = [];
       }
@@ -163,22 +195,22 @@ export async function onRequestGet({ env }) {
 
     // Repository timestamps guarantee that a private project still appears in
     // the feed even when GitHub's event feed has expired the individual event.
-    const timestampFallbacks = privateRepos.map((repo) => ({
-      type: 'PrivateProjectEvent',
-      repo: repo.name,
-      created_at: repoUpdatedAt(repo),
-      detail: 'project updated',
-      private: true
-    }));
+    privateRepos.forEach((repo) => {
+      if (!privateActivity.some((event) => event.repo === repo.name) && repoUpdatedAt(repo)) {
+        privateActivity.push({
+          type: 'PrivateProjectEvent',
+          repo: repo.name,
+          created_at: repoUpdatedAt(repo),
+          detail: 'project updated',
+          private: true
+        });
+      }
+    });
 
-    const activity = [...publicActivity, ...privateActivity, ...timestampFallbacks]
+    const activity = [...publicActivity, ...privateActivity]
       .filter((event) => event.created_at)
       .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
-      .filter((event, index, list) => {
-        if (!event.private) return true;
-        return list.findIndex((candidate) => candidate.private && candidate.repo === event.repo) === index;
-      })
-      .slice(0, 30);
+      .slice(0, 12);
 
     return json({
       profile: {
@@ -205,13 +237,13 @@ export async function onRequestGet({ env }) {
       activity,
       generated_at: new Date().toISOString()
     });
-   } catch (error) {
-      console.error('GitHub API error:', error);
+  } catch (error) {
+    console.error('GitHub API error:', error);
 
     return json({
       error: 'GitHub API unavailable',
       detail: error instanceof Error ? error.message : String(error)
-   }, 502);
+    }, 502);
   }
 }
 
