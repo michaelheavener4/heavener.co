@@ -205,8 +205,13 @@ export async function onRequestGet({ env }) {
       activity,
       generated_at: new Date().toISOString()
     });
-  } catch (error) {
-    return json({ error: error instanceof Error ? error.message : 'GitHub API unavailable' }, 502);
+   } catch (error) {
+      console.error('GitHub API error:', error);
+
+    return json({
+      error: 'GitHub API unavailable',
+      detail: error instanceof Error ? error.message : String(error)
+   }, 502);
   }
 }
 
