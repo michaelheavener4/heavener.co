@@ -7,7 +7,7 @@ const githubHeaders = (env) => {
     'X-GitHub-Api-Version': '2022-11-28',
     'User-Agent': 'heavener.co'
   };
-  if (env.GITHUB_TOKEN) headers.Authorization = `Bearer ${env.GITHUB_TOKEN}`;
+  if (env.GITHUB_TOKEN) headers.Authorization = `token ${env.GITHUB_TOKEN}`;
   return headers;
 };
 
