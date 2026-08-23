@@ -1,17 +1,6 @@
 const USERNAME = 'michaelheavener4';
 const CACHE_SECONDS = 120;
 
-const PRIVATE_PROJECTS = {
-  'x-growth-agent': {
-    description: 'Autonomous tooling for experimentation, analytics, and X growth.',
-    label: 'PRIVATE · ACTIVE'
-  },
-  dashcommand: {
-    description: 'Agent orchestration and mission-control tooling.',
-    label: 'PRIVATE · ACTIVE'
-  }
-};
-
 const githubHeaders = (env) => {
   const headers = {
     Accept: 'application/vnd.github+json',
@@ -22,10 +11,12 @@ const githubHeaders = (env) => {
   return headers;
 };
 
-const github = async (path, env) => {
+const github = async (path, env, { privateRequest = false } = {}) => {
   const response = await fetch(`https://api.github.com${path}`, {
     headers: githubHeaders(env),
-    cf: { cacheTtl: CACHE_SECONDS, cacheEverything: true }
+    // Never cache authenticated/private GitHub responses at the edge. A cached
+    // unauthenticated /user/repos response would otherwise hide private repos.
+    ...(privateRequest ? {} : { cf: { cacheTtl: CACHE_SECONDS, cacheEverything: true } })
   });
   if (!response.ok) throw new Error(`GitHub ${path} returned ${response.status}`);
   return response.json();
@@ -72,7 +63,9 @@ const activityDetail = (event) => {
   }
 };
 
-const repoSnapshot = (repo) => ({
+const repoUpdatedAt = (repo) => repo.pushed_at || repo.updated_at || null;
+
+const publicRepoView = (repo) => ({
   name: repo.name,
   full_name: repo.full_name,
   html_url: repo.html_url,
@@ -83,40 +76,61 @@ const repoSnapshot = (repo) => ({
   forks: repo.forks_count || 0,
   pushed_at: repo.pushed_at,
   updated_at: repo.updated_at,
-  archived: repo.archived,
-  private: Boolean(repo.private)
+  archived: repo.archived
 });
+
+// This is the privacy boundary. Private repositories are represented only by
+// harmless portfolio metadata. No private URL, ID, branch, commit, path, diff,
+// issue, or source content is returned to the browser.
+const privateProjectView = (repo) => {
+  const pushedAt = repoUpdatedAt(repo);
+  const recentCutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
+  return {
+    name: repo.name,
+    description: repo.description || 'Private software project.',
+    language: repo.language || null,
+    label: 'PRIVATE · ACTIVE',
+    status: pushedAt && new Date(pushedAt).getTime() >= recentCutoff ? 'active' : 'maintained',
+    pushed_at: pushedAt,
+    updated_at: repo.updated_at || null
+  };
+};
 
 export async function onRequestGet({ env }) {
   try {
-    const [profile, repos] = await Promise.all([
-      github(`/users/${USERNAME}`, env),
-      env.GITHUB_TOKEN
-        ? github('/user/repos?per_page=100&affiliation=owner&sort=pushed&direction=desc', env)
-        : github(`/users/${USERNAME}/repos?per_page=100&sort=pushed&direction=desc`, env)
-    ]);
+    const authenticated = Boolean(env.GITHUB_TOKEN);
 
-    const ownedRepos = repos.filter((repo) => !repo.fork && repo.owner?.login === USERNAME);
+    const profilePromise = github(`/users/${USERNAME}`, env);
+
+    // /user/repos is required for private repositories. It is intentionally
+    // uncached because its response depends on the bearer token.
+    const reposPromise = authenticated
+      ? github('/user/repos?per_page=100&affiliation=owner&sort=pushed&direction=desc', env, { privateRequest: true })
+      : github(`/users/${USERNAME}/repos?per_page=100&sort=pushed&direction=desc`, env);
+
+    const [profile, repos] = await Promise.all([profilePromise, reposPromise]);
+
+    const ownedRepos = repos
+      .filter((repo) => !repo.fork && repo.owner?.login === USERNAME)
+      .sort((a, b) => new Date(repoUpdatedAt(b) || 0) - new Date(repoUpdatedAt(a) || 0));
+
     const publicRepos = ownedRepos.filter((repo) => !repo.private);
-    const privateRepos = ownedRepos.filter((repo) => repo.private);
+    const privateRepos = authenticated ? ownedRepos.filter((repo) => repo.private) : [];
 
     const languages = [...new Set(publicRepos.map((repo) => repo.language).filter(Boolean))];
     const totalStars = publicRepos.reduce((sum, repo) => sum + (repo.stargazers_count || 0), 0);
     const totalForks = publicRepos.reduce((sum, repo) => sum + (repo.forks_count || 0), 0);
 
-    // Public GitHub events are still useful for public activity. Private activity is
-    // represented separately using repository metadata + timestamps so no private
-    // commit messages, paths, diffs, URLs, or source contents are exposed.
-    let events = [];
+    let publicEvents = [];
     try {
-      events = await github(`/users/${USERNAME}/events/public?per_page=50`, env);
+      publicEvents = await github(`/users/${USERNAME}/events/public?per_page=50`, env);
     } catch (_) {
-      events = [];
+      publicEvents = [];
     }
 
-    const publicActivity = events
+    const publicActivity = publicEvents
       .filter((event) => event.repo?.name && event.repo.name.split('/')[0] === USERNAME)
-      .slice(0, 12)
+      .slice(0, 15)
       .map((event) => ({
         type: event.type,
         repo: event.repo.name.split('/')[1],
@@ -126,29 +140,45 @@ export async function onRequestGet({ env }) {
         private: false
       }));
 
-    const privateActivity = await Promise.all(privateRepos.map(async (repo) => {
-      let latestCommitAt = repo.pushed_at || repo.updated_at;
+    // GitHub's authenticated user-events feed can contain private activity.
+    // We deliberately reduce it to a generic project update before returning it.
+    let privateActivity = [];
+    if (authenticated && privateRepos.length) {
       try {
-        const commits = await github(`/repos/${USERNAME}/${encodeURIComponent(repo.name)}/commits?per_page=1`, env);
-        if (commits[0]?.commit?.author?.date) latestCommitAt = commits[0].commit.author.date;
+        const events = await github('/user/events?per_page=50', env, { privateRequest: true });
+        const privateNames = new Set(privateRepos.map((repo) => repo.full_name));
+        privateActivity = events
+          .filter((event) => event.repo?.name && privateNames.has(event.repo.name))
+          .map((event) => ({
+            type: 'PrivateProjectEvent',
+            repo: event.repo.name.split('/').pop(),
+            created_at: event.created_at,
+            detail: event.type === 'PushEvent' ? 'code updated' : 'project activity',
+            private: true
+          }));
       } catch (_) {
-        // Repository timestamps are sufficient fallback; never fail the whole page.
+        privateActivity = [];
       }
-      const project = PRIVATE_PROJECTS[repo.name] || {};
-      return {
-        type: 'PrivateProjectEvent',
-        repo: repo.name,
-        created_at: latestCommitAt,
-        detail: 'code updated',
-        private: true,
-        description: project.description || 'Private software project.',
-        label: project.label || 'PRIVATE'
-      };
+    }
+
+    // Repository timestamps guarantee that a private project still appears in
+    // the feed even when GitHub's event feed has expired the individual event.
+    const timestampFallbacks = privateRepos.map((repo) => ({
+      type: 'PrivateProjectEvent',
+      repo: repo.name,
+      created_at: repoUpdatedAt(repo),
+      detail: 'project updated',
+      private: true
     }));
 
-    const activity = [...publicActivity, ...privateActivity]
-      .sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0))
-      .slice(0, 20);
+    const activity = [...publicActivity, ...privateActivity, ...timestampFallbacks]
+      .filter((event) => event.created_at)
+      .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
+      .filter((event, index, list) => {
+        if (!event.private) return true;
+        return list.findIndex((candidate) => candidate.private && candidate.repo === event.repo) === index;
+      })
+      .slice(0, 30);
 
     return json({
       profile: {
@@ -170,18 +200,8 @@ export async function onRequestGet({ env }) {
         forks: totalForks,
         languages
       },
-      repos: publicRepos.map(repoSnapshot),
-      private_projects: privateRepos.map((repo) => {
-        const project = PRIVATE_PROJECTS[repo.name] || {};
-        return {
-          name: repo.name,
-          description: project.description || 'Private software project.',
-          label: project.label || 'PRIVATE',
-          pushed_at: repo.pushed_at,
-          updated_at: repo.updated_at,
-          language: repo.language
-        };
-      }),
+      private_projects: privateRepos.map(privateProjectView),
+      repos: publicRepos.map(publicRepoView),
       activity,
       generated_at: new Date().toISOString()
     });
