@@ -14,11 +14,23 @@ const githubHeaders = (env) => {
 const github = async (path, env, { privateRequest = false } = {}) => {
   const response = await fetch(`https://api.github.com${path}`, {
     headers: githubHeaders(env),
-    // Never cache authenticated/private GitHub responses at the edge. A cached
-    // unauthenticated /user/repos response would otherwise hide private repos.
-    ...(privateRequest ? {} : { cf: { cacheTtl: CACHE_SECONDS, cacheEverything: true } })
+    ...(privateRequest ? {} : {
+      cf: { cacheTtl: CACHE_SECONDS, cacheEverything: true }
+    })
   });
-  if (!response.ok) throw new Error(`GitHub ${path} returned ${response.status}`);
+
+  if (!response.ok) {
+    const body = await response.text();
+    console.error('GitHub request failed', {
+      path,
+      status: response.status,
+      body
+    });
+    throw new Error(
+      `GitHub ${path} returned ${response.status}: ${body}`
+    );
+  }
+
   return response.json();
 };
 
