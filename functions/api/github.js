@@ -26,7 +26,9 @@ const json = (data, status = 200) => new Response(JSON.stringify(data), {
   status,
   headers: {
     'Content-Type': 'application/json; charset=utf-8',
-    'Cache-Control': 'public, max-age=120, stale-while-revalidate=600',
+    // The page is explicitly a live portfolio. Do not let the public API
+    // response itself become stale after a token/project update.
+    'Cache-Control': 'no-store',
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Methods': 'GET, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type'
@@ -79,9 +81,9 @@ const publicRepoView = (repo) => ({
   archived: repo.archived
 });
 
-// This is the privacy boundary. Private repositories are represented only by
-// harmless portfolio metadata. No private URL, ID, branch, commit, path, diff,
-// issue, or source content is returned to the browser.
+// Privacy boundary: private repositories are represented only by harmless
+// portfolio metadata. No private URL, ID, branch, commit, path, diff, issue,
+// or source content is returned to the browser.
 const privateProjectView = (repo) => {
   const pushedAt = repoUpdatedAt(repo);
   const recentCutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
@@ -129,8 +131,7 @@ export async function onRequestGet({ env }) {
     }
 
     // GitHub's public event feed can contain many nearly-identical PushEvents
-    // for a single project. Keep only the latest meaningful event per repo so
-    // the portfolio reads like a project timeline rather than a raw event log.
+    // for a single project. Keep only the latest meaningful event per repo.
     const publicActivityByRepo = new Map();
     publicEvents
       .filter((event) => event.repo?.name && event.repo.name.split('/')[0] === USERNAME)
@@ -148,8 +149,6 @@ export async function onRequestGet({ env }) {
         }
       });
 
-    // Repository timestamps provide a reliable fallback for public projects
-    // whose event has aged out of GitHub's public activity feed.
     publicRepos.forEach((repo) => {
       if (!publicActivityByRepo.has(repo.name) && repoUpdatedAt(repo)) {
         publicActivityByRepo.set(repo.name, {
@@ -165,8 +164,8 @@ export async function onRequestGet({ env }) {
 
     const publicActivity = [...publicActivityByRepo.values()];
 
-    // GitHub's authenticated user-events feed can contain private activity.
-    // We deliberately reduce it to a generic project update before returning it.
+    // Reduce authenticated private activity to a generic project update before
+    // it reaches the browser. No GitHub private event payload is exposed.
     let privateActivity = [];
     if (authenticated && privateRepos.length) {
       try {
@@ -193,8 +192,8 @@ export async function onRequestGet({ env }) {
       }
     }
 
-    // Repository timestamps guarantee that a private project still appears in
-    // the feed even when GitHub's event feed has expired the individual event.
+    // Repository timestamps guarantee that a private project still appears
+    // even when GitHub's event feed has expired the individual event.
     privateRepos.forEach((repo) => {
       if (!privateActivity.some((event) => event.repo === repo.name) && repoUpdatedAt(repo)) {
         privateActivity.push({
@@ -239,7 +238,6 @@ export async function onRequestGet({ env }) {
     });
   } catch (error) {
     console.error('GitHub API error:', error);
-
     return json({
       error: 'GitHub API unavailable',
       detail: error instanceof Error ? error.message : String(error)
