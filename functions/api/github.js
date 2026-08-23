@@ -1,5 +1,16 @@
 const USERNAME = 'michaelheavener4';
-const CACHE_SECONDS = 300;
+const CACHE_SECONDS = 120;
+
+const PRIVATE_PROJECTS = {
+  'x-growth-agent': {
+    description: 'Autonomous tooling for experimentation, analytics, and X growth.',
+    label: 'PRIVATE · ACTIVE'
+  },
+  dashcommand: {
+    description: 'Agent orchestration and mission-control tooling.',
+    label: 'PRIVATE · ACTIVE'
+  }
+};
 
 const githubHeaders = (env) => {
   const headers = {
@@ -24,7 +35,7 @@ const json = (data, status = 200) => new Response(JSON.stringify(data), {
   status,
   headers: {
     'Content-Type': 'application/json; charset=utf-8',
-    'Cache-Control': 'public, max-age=300, stale-while-revalidate=900',
+    'Cache-Control': 'public, max-age=120, stale-while-revalidate=600',
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Methods': 'GET, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type'
@@ -61,32 +72,83 @@ const activityDetail = (event) => {
   }
 };
 
+const repoSnapshot = (repo) => ({
+  name: repo.name,
+  full_name: repo.full_name,
+  html_url: repo.html_url,
+  description: repo.description,
+  language: repo.language,
+  topics: repo.topics || [],
+  stars: repo.stargazers_count || 0,
+  forks: repo.forks_count || 0,
+  pushed_at: repo.pushed_at,
+  updated_at: repo.updated_at,
+  archived: repo.archived,
+  private: Boolean(repo.private)
+});
+
 export async function onRequestGet({ env }) {
   try {
-    const [profile, repos, events] = await Promise.all([
+    const [profile, repos] = await Promise.all([
       github(`/users/${USERNAME}`, env),
-      github(`/users/${USERNAME}/repos?per_page=100&sort=pushed&direction=desc`, env),
-      github(`/users/${USERNAME}/events/public?per_page=50`, env)
+      env.GITHUB_TOKEN
+        ? github('/user/repos?per_page=100&affiliation=owner&sort=pushed&direction=desc', env)
+        : github(`/users/${USERNAME}/repos?per_page=100&sort=pushed&direction=desc`, env)
     ]);
 
-    const publicRepos = repos
-      .filter((repo) => !repo.fork)
-      .sort((a, b) => new Date(b.pushed_at || 0) - new Date(a.pushed_at || 0));
+    const ownedRepos = repos.filter((repo) => !repo.fork && repo.owner?.login === USERNAME);
+    const publicRepos = ownedRepos.filter((repo) => !repo.private);
+    const privateRepos = ownedRepos.filter((repo) => repo.private);
 
     const languages = [...new Set(publicRepos.map((repo) => repo.language).filter(Boolean))];
     const totalStars = publicRepos.reduce((sum, repo) => sum + (repo.stargazers_count || 0), 0);
     const totalForks = publicRepos.reduce((sum, repo) => sum + (repo.forks_count || 0), 0);
 
-    const activity = events
-      .filter((event) => event.repo?.name)
-      .slice(0, 20)
+    // Public GitHub events are still useful for public activity. Private activity is
+    // represented separately using repository metadata + timestamps so no private
+    // commit messages, paths, diffs, URLs, or source contents are exposed.
+    let events = [];
+    try {
+      events = await github(`/users/${USERNAME}/events/public?per_page=50`, env);
+    } catch (_) {
+      events = [];
+    }
+
+    const publicActivity = events
+      .filter((event) => event.repo?.name && event.repo.name.split('/')[0] === USERNAME)
+      .slice(0, 12)
       .map((event) => ({
         type: event.type,
-        repo: event.repo.name,
+        repo: event.repo.name.split('/')[1],
         repo_url: `https://github.com/${event.repo.name}`,
         created_at: event.created_at,
-        detail: activityDetail(event)
+        detail: activityDetail(event),
+        private: false
       }));
+
+    const privateActivity = await Promise.all(privateRepos.map(async (repo) => {
+      let latestCommitAt = repo.pushed_at || repo.updated_at;
+      try {
+        const commits = await github(`/repos/${USERNAME}/${encodeURIComponent(repo.name)}/commits?per_page=1`, env);
+        if (commits[0]?.commit?.author?.date) latestCommitAt = commits[0].commit.author.date;
+      } catch (_) {
+        // Repository timestamps are sufficient fallback; never fail the whole page.
+      }
+      const project = PRIVATE_PROJECTS[repo.name] || {};
+      return {
+        type: 'PrivateProjectEvent',
+        repo: repo.name,
+        created_at: latestCommitAt,
+        detail: 'code updated',
+        private: true,
+        description: project.description || 'Private software project.',
+        label: project.label || 'PRIVATE'
+      };
+    }));
+
+    const activity = [...publicActivity, ...privateActivity]
+      .sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0))
+      .slice(0, 20);
 
     return json({
       profile: {
@@ -101,24 +163,25 @@ export async function onRequestGet({ env }) {
         created_at: profile.created_at
       },
       stats: {
-        repositories: publicRepos.length,
+        repositories: ownedRepos.length,
+        public_repositories: publicRepos.length,
+        private_repositories: privateRepos.length,
         stars: totalStars,
         forks: totalForks,
         languages
       },
-      repos: publicRepos.map((repo) => ({
-        name: repo.name,
-        full_name: repo.full_name,
-        html_url: repo.html_url,
-        description: repo.description,
-        language: repo.language,
-        topics: repo.topics || [],
-        stars: repo.stargazers_count,
-        forks: repo.forks_count,
-        pushed_at: repo.pushed_at,
-        updated_at: repo.updated_at,
-        archived: repo.archived
-      })),
+      repos: publicRepos.map(repoSnapshot),
+      private_projects: privateRepos.map((repo) => {
+        const project = PRIVATE_PROJECTS[repo.name] || {};
+        return {
+          name: repo.name,
+          description: project.description || 'Private software project.',
+          label: project.label || 'PRIVATE',
+          pushed_at: repo.pushed_at,
+          updated_at: repo.updated_at,
+          language: repo.language
+        };
+      }),
       activity,
       generated_at: new Date().toISOString()
     });
