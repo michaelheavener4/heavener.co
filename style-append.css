@@ -1,0 +1,9 @@
+/* homepage v2 additions (Oct 25, 2026) — appended only; no existing rule is changed,
+   so the GitHub page that shares this stylesheet is unaffected. */
+.home-sections .github-section:first-child { border-top:1px solid var(--line); }
+.home-sections .github-section:last-child { border-bottom:none; }
+.about-copy { max-width:660px; color:#b7bbc0; font-size:1.02rem; }
+.about-copy p { margin:0 0 18px; }
+.about-copy p:last-child { margin-bottom:0; }
+.about-mail { color:var(--accent); border-bottom:1px solid var(--line); padding-bottom:2px; transition:border-color .2s; }
+.about-mail:hover { border-color:var(--accent); }
