@@ -58,10 +58,32 @@
 
 .home-sections .github-section:first-child { border-top:none; }
 
+/* hero row + portrait */
+.hv-hero-row { display:grid; grid-template-columns:1fr auto; gap:56px; align-items:start; }
+.hv-portrait { margin:6px 0 0; }
+.hv-portrait img { width:232px; height:232px; object-fit:cover; display:block; border:1px solid var(--line); }
+.hv-portrait figcaption { display:flex; justify-content:space-between; gap:14px; margin-top:11px; font-family:'DM Mono',monospace; font-size:.56rem; letter-spacing:.1em; color:var(--muted); text-transform:uppercase; }
+.hv-portrait .hv-open { color:var(--accent); white-space:nowrap; }
+
+/* by-day ledger */
+.hv-ledger { border-top:1px solid var(--line); }
+.hv-ledger-row { display:grid; grid-template-columns:1.1fr .8fr 1.9fr auto; gap:22px; padding:24px 0; border-bottom:1px solid var(--line); align-items:baseline; }
+.hv-ledger-role { font-weight:600; letter-spacing:-.02em; }
+.hv-ledger-org { color:var(--fg); }
+.hv-ledger-detail { color:var(--muted); font-size:.94rem; line-height:1.55; }
+.hv-ledger-date { font-family:'DM Mono',monospace; font-size:.6rem; letter-spacing:.1em; color:var(--muted); white-space:nowrap; }
+.byday-note { margin:26px 0 0; color:#b7bbc0; max-width:660px; }
+.accent-line { color:var(--accent); }
+.home-footer a:hover { color:var(--accent); }
+
 @media(max-width:860px){
   .hv-feature { grid-template-columns:1fr; gap:32px; }
   .hv-strip { grid-template-columns:repeat(2,1fr); }
   .hv-method { grid-template-columns:1fr; }
   .hv-status-right { display:none; }
   .hv-term-body code { font-size:.68rem; }
+  .hv-hero-row { grid-template-columns:1fr; gap:30px; }
+  .hv-portrait img { width:168px; height:168px; }
+  .hv-portrait figcaption { justify-content:flex-start; gap:20px; }
+  .hv-ledger-row { grid-template-columns:1fr; gap:5px; padding:20px 0; }
 }
